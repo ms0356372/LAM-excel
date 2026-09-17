@@ -23,16 +23,22 @@ def save_rules(path: str | Path, rules: list[CustomRule]) -> None:
     temporary.replace(destination)
 
 
-def load_rules(path: str | Path) -> list[CustomRule]:
+def load_rules_with_legacy_info(path: str | Path) -> tuple[list[CustomRule], int]:
     source = Path(path)
     if not source.exists():
-        return []
+        return [], 0
     try:
         payload = json.loads(source.read_text(encoding="utf-8"))
         if not isinstance(payload, dict):
             raise ValueError("規則檔最外層必須是 JSON 物件。")
         if payload.get("version") != 1 or not isinstance(payload.get("rules"), list):
             raise ValueError("不支援的規則檔格式。")
-        return [CustomRule.from_dict(item) for item in payload["rules"]]
+        active = [item for item in payload["rules"] if not isinstance(item, dict) or item.get("enabled", True) is not False]
+        return [CustomRule.from_dict(item) for item in active], len(payload["rules"]) - len(active)
     except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
         raise ValueError(f"規則檔無法讀取：{exc}") from exc
+
+
+def load_rules(path: str | Path) -> list[CustomRule]:
+    """載入規則；舊格式的停用規則視為已刪除。"""
+    return load_rules_with_legacy_info(path)[0]

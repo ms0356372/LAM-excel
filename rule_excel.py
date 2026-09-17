@@ -11,8 +11,8 @@ from rule_models import LABEL_TO_OPERATOR, OPERATOR_LABELS, CustomRule
 from rule_view import collect_rule_statuses
 
 RULE_SHEET = "規則"
-HEADERS = ("啟用", "順序", "欄位", "表頭", "性別", "判斷方式", "下限", "上限", "判斷值", "分級", "備註", "檢查結果")
-REQUIRED_HEADERS = HEADERS[:10]
+HEADERS = ("順序", "欄位", "表頭", "性別", "判斷方式", "下限", "上限", "判斷值", "分級", "備註", "檢查結果")
+REQUIRED_HEADERS = HEADERS[:9]
 class RuleExcelError(ValueError): pass
 
 @dataclass
@@ -29,18 +29,19 @@ class ImportRow:
 class ImportResult:
     rows: list[ImportRow]
     global_warnings: list[str] = field(default_factory=list)
+    ignored_legacy_disabled: int = 0
     @property
     def rules(self): return [r.rule for r in sorted(self.rows, key=lambda x: x.order or 0) if r.rule and not r.errors]
     @property
     def has_errors(self): return any(r.errors for r in self.rows)
 
 def _text(value): return "" if value is None else str(value).strip()
-def _enabled(value):
+def _legacy_enabled(value):
     if isinstance(value, bool): return value
     value = _text(value).casefold()
     if value in {"是", "true", "1"}: return True
     if value in {"否", "false", "0"}: return False
-    raise ValueError("啟用只允許是／否、TRUE／FALSE 或 1／0。")
+    raise ValueError("舊版啟用欄只允許是／否、TRUE／FALSE 或 1／0。")
 def _number(value, label):
     try:
         if value is None or isinstance(value, bool) or not _text(value): raise ValueError
@@ -60,8 +61,6 @@ def parse_excel_rule(values, mapping, excel_row):
         raw_order = get("順序"); row.order = int(raw_order)
         if row.order <= 0 or float(raw_order) != row.order: raise ValueError
     except (TypeError, ValueError): row.errors.append("順序必須為正整數。")
-    try: enabled = _enabled(get("啟用"))
-    except ValueError as exc: row.errors.append(str(exc)); enabled = True
     column, gender, label, level = _text(get("欄位")).upper(), _text(get("性別")), _text(get("判斷方式")), _text(get("分級"))
     operator = LABEL_TO_OPERATOR.get(label, label); minimum = maximum = value = None
     if label == "區間":
@@ -79,7 +78,7 @@ def parse_excel_rule(values, mapping, excel_row):
         value = _text(get("判斷值"))
         if not value: row.errors.append("完全相符的內容不可空白。")
         if _text(get("下限")) or _text(get("上限")): row.errors.append("完全相符規則的下限與上限應為空白。")
-    rule = CustomRule(column, gender, operator, level, enabled, value, minimum, maximum, _text(get("表頭")), _text(get("備註")))
+    rule = CustomRule(column, gender, operator, level, value, minimum, maximum, _text(get("表頭")), _text(get("備註")))
     try: rule.validate()
     except ValueError as exc:
         if str(exc) not in row.errors: row.errors.append(str(exc))
@@ -95,14 +94,20 @@ def parse_rules_excel(path):
         if RULE_SHEET not in wb.sheetnames: raise RuleExcelError("Excel 規則檔找不到「規則」工作表。")
         ws = wb[RULE_SHEET]
         mapping = validate_rule_excel_headers([c.value for c in next(ws.iter_rows(min_row=1, max_row=1))])
-        rows = []
+        rows = []; ignored = 0
         for number, cells in enumerate(ws.iter_rows(min_row=2, values_only=True), 2):
             values = list(cells)
             if all(not _text(v) for v in values): continue
+            if "啟用" in mapping:
+                try: legacy_enabled = _legacy_enabled(values[mapping["啟用"]] if mapping["啟用"] < len(values) else None)
+                except ValueError as exc:
+                    rows.append(ImportRow(number, errors=[str(exc)])); continue
+                if not legacy_enabled:
+                    ignored += 1; continue
             rows.append(parse_excel_rule(values, mapping, number))
     finally: wb.close()
     if not rows: raise RuleExcelError("規則工作表中沒有可匯入的規則。")
-    result = ImportResult(rows); _order_warnings(result)
+    result = ImportResult(rows, ignored_legacy_disabled=ignored); _order_warnings(result)
     valid = [r for r in rows if r.rule and not r.errors]
     for row, status in zip(valid, collect_rule_statuses([r.rule for r in valid])):
         for message in status.messages:
@@ -119,7 +124,7 @@ def _order_warnings(result):
         for row in valid: row.warnings.append("規則順序不連續，匯入後將重新編號")
 
 def format_rule_for_excel(rule, order, status, headers=None):
-    return ["是" if rule.enabled else "否", order, rule.column, rule.header or (headers or {}).get(rule.column, ""), rule.gender,
+    return [order, rule.column, rule.header or (headers or {}).get(rule.column, ""), rule.gender,
             OPERATOR_LABELS[rule.operator], rule.minimum if rule.operator == "range" else None,
             rule.maximum if rule.operator == "range" else None, rule.value if rule.operator != "range" else None,
             rule.level, rule.note, status]
@@ -137,13 +142,13 @@ def _format_sheet(ws):
     for c in ws[1]: c.font = Font(bold=True); c.fill = fill; c.alignment = Alignment(vertical="center")
     for row in ws.iter_rows(min_row=2):
         for c in row: c.alignment = Alignment(vertical="center")
-    ws.freeze_panes = "A2"; ws.auto_filter.ref = f"A1:L{max(ws.max_row, 1)}"
-    for i, width in enumerate((10, 9, 9, 18, 10, 14, 12, 12, 18, 12, 24, 30), 1): ws.column_dimensions[get_column_letter(i)].width = width
-    for col, options in (("A", '"是,否"'), ("E", '"共用,男,女"'), ("F", '"區間,>,>=,<,<=,完全相符"'), ("J", '"第一級,第二級,第三級,第四級"')):
+    ws.freeze_panes = "A2"; ws.auto_filter.ref = f"A1:K{max(ws.max_row, 1)}"
+    for i, width in enumerate((9, 9, 18, 10, 14, 12, 12, 18, 12, 24, 30), 1): ws.column_dimensions[get_column_letter(i)].width = width
+    for col, options in (("D", '"共用,男,女"'), ("E", '"區間,>,>=,<,<=,完全相符"'), ("I", '"第一級,第二級,第三級,第四級"')):
         dv = DataValidation(type="list", formula1=options, allow_blank=False); dv.error = "請從下拉清單選擇有效值。"; dv.showErrorMessage = True
         ws.add_data_validation(dv); dv.add(f"{col}2:{col}10000")
 def _instructions(wb):
     ws = wb.create_sheet("填寫說明")
-    lines = ["規則檔版本：1", "", "【啟用】是 / 否", "【順序】決定 first match wins 的判斷順序，數字越小越先判斷。", "【欄位】填 Excel 欄位字母，例如 M、N、AA。", "【表頭】建議填第一列表頭名稱，方便人工確認。", "【性別】共用、男、女", "【判斷方式】區間、>、>=、<、<=、完全相符", "【區間】下限 18.5、上限 23.9 代表 18.5 <= value <= 23.9。", "【大於】> 10.6，10.6 不符合。", "【大於等於】>= 10.6，10.6 符合。", "【小於】< 25.8，25.8 不符合。", "【小於等於】<= 25.8，25.8 符合。", "【完全相符】例如 ++、代謝症候群，必須完全一致。", "【分級】第一級、第二級、第三級、第四級", "【注意事項】", "• 空白列不會匯入。", "• 數值規則必須使用數字。", "• 規則順序會影響 first match wins。", "• 男／女專用規則優先於共用規則。", "• 規則重疊時會顯示警告。", "• Excel 匯入前會先預覽，不會直接覆蓋規則。"]
+    lines = ["規則檔版本：2", "", "【順序】決定 first match wins 的判斷順序，數字越小越先判斷。", "【欄位】填 Excel 欄位字母，例如 M、N、AA。", "【表頭】建議填第一列表頭名稱，方便人工確認。", "【性別】共用、男、女", "【判斷方式】區間、>、>=、<、<=、完全相符", "【區間】下限 18.5、上限 23.9 代表 18.5 <= value <= 23.9。", "【大於】> 10.6，10.6 不符合。", "【大於等於】>= 10.6，10.6 符合。", "【小於】< 25.8，25.8 不符合。", "【小於等於】<= 25.8，25.8 符合。", "【完全相符】例如 ++、代謝症候群，必須完全一致。", "【分級】第一級、第二級、第三級、第四級", "【舊版相容】舊檔若有啟用欄，是／TRUE／1 會匯入；否／FALSE／0 會忽略。", "【注意事項】", "• 存在的規則會直接生效；不再使用的規則請在程式中刪除。", "• 空白列不會匯入。", "• 數值規則必須使用數字。", "• 規則順序會影響 first match wins。", "• 男／女專用規則優先於共用規則。", "• 規則重疊時會顯示警告。", "• Excel 匯入前會先預覽，不會直接覆蓋規則。"]
     for line in lines: ws.append([line])
     ws.column_dimensions["A"].width = 90; ws["A1"].font = Font(bold=True)

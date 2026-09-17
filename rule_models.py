@@ -28,7 +28,6 @@ class CustomRule:
     gender: str
     operator: str
     level: str
-    enabled: bool = True
     value: Any = None
     minimum: float | None = None
     maximum: float | None = None
@@ -57,8 +56,6 @@ class CustomRule:
             raise ValueError("規則判斷方式無效。")
         if self.level not in VALID_LEVELS:
             raise ValueError("規則分級必須為第一級至第四級。")
-        if not isinstance(self.enabled, bool):
-            raise ValueError("規則啟用狀態必須為布林值。")
         if self.operator == "range":
             self.minimum = _number(self.minimum, "區間下限")
             self.maximum = _number(self.maximum, "區間上限")
@@ -84,7 +81,7 @@ class CustomRule:
         rule = cls(
             column=data.get("column", ""), gender=data.get("gender", "共用"),
             operator=data.get("operator", ""), level=data.get("level", ""),
-            enabled=data.get("enabled", True), value=data.get("value"),
+            value=data.get("value"),
             minimum=data.get("minimum", data.get("min")),
             maximum=data.get("maximum", data.get("max")),
             header=data.get("header", ""), note=data.get("note", ""),

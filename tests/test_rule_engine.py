@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from config_manager import load_rules, save_rules
+from config_manager import load_rules, load_rules_with_legacy_info, save_rules
 from rule_engine import (
     evaluate_custom_level,
     evaluate_rule,
@@ -54,12 +54,10 @@ def test_gender_override_then_common_fallback():
     assert evaluate_custom_level(82, "未知", [common, female]).level == "第二級"
 
 
-def test_first_match_wins_and_disabled_rule_is_ignored():
+def test_first_match_wins():
     first = rule(">", "第二級", value=10)
     second = rule(">", "第三級", value=20)
     assert evaluate_custom_level(25, "", [first, second]).level == "第二級"
-    first.enabled = False
-    assert evaluate_custom_level(25, "", [first, second]).level == "第三級"
 
 
 def test_blank_skips():
@@ -79,6 +77,17 @@ def test_validation_and_json_roundtrip(tmp_path):
     path.write_text(json.dumps([]), encoding="utf-8")
     with pytest.raises(ValueError, match="最外層"):
         load_rules(path)
+
+
+def test_legacy_disabled_json_rules_are_ignored(tmp_path):
+    path = tmp_path / "legacy.json"
+    path.write_text(json.dumps({"version": 1, "rules": [
+        {"column": "A", "gender": "共用", "operator": ">", "value": 10, "level": "第一級", "enabled": True},
+        {"column": "B", "gender": "共用", "operator": ">", "value": 20, "level": "第二級", "enabled": False},
+    ]}), encoding="utf-8")
+    rules, ignored = load_rules_with_legacy_info(path)
+    assert [item.column for item in rules] == ["A"]
+    assert ignored == 1 and "enabled" not in rules[0].to_dict()
 
 
 @pytest.mark.parametrize(
@@ -119,13 +128,11 @@ def test_conflict_scope_duplicate_and_same_condition_classification():
     assert all(conflict.second_index not in {3, 4} for conflict in conflicts)
 
 
-def test_disabled_rules_are_not_conflicts_and_override_is_separate():
+def test_override_is_separate_from_same_gender_conflicts():
     common = rule(">=", "第二級", value=80)
     male = rule(">=", "第三級", "男", value=90)
-    disabled = rule(">=", "第四級", value=90)
-    disabled.enabled = False
-    assert find_rule_conflicts([common, male, disabled]) == []
-    assert find_override_pairs([common, male, disabled]) == [(1, 0)]
+    assert find_rule_conflicts([common, male]) == []
+    assert find_override_pairs([common, male]) == [(1, 0)]
 
 
 def test_shared_condition_formatting():

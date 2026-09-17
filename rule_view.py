@@ -80,7 +80,7 @@ def rule_search_text(rule: CustomRule, header: str = "") -> str:
 def filter_rule_indexes(
     rules: list[CustomRule], statuses: list[RuleStatus], headers: dict[str, str],
     search: str = "", gender: str = "全部", level: str = "全部",
-    status: str = "全部", enabled: str = "全部",
+    status: str = "全部",
 ) -> list[int]:
     needle = search.strip().casefold()
     result: list[int] = []
@@ -93,8 +93,6 @@ def filter_rule_indexes(
         if level != "全部" and rule.level != level:
             continue
         if status != "全部" and {"正常": "normal", "警告": "warning", "錯誤": "error"}[status] != item_status.severity:
-            continue
-        if enabled != "全部" and (enabled == "已啟用") != rule.enabled:
             continue
         result.append(index)
     return result

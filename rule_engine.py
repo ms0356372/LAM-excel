@@ -50,7 +50,7 @@ def to_number(value: Any) -> float | None:
 
 def evaluate_rule(value: Any, rule: CustomRule) -> bool:
     """判斷單一值是否符合規則；數值轉換失敗安全地回傳 False。"""
-    if not rule.enabled or is_blank_value(value):
+    if is_blank_value(value):
         return False
     if rule.operator == "exact":
         return str(value).strip() == str(rule.value).strip()
@@ -70,7 +70,7 @@ def evaluate_rule(value: Any, rule: CustomRule) -> bool:
 
 def evaluate_custom_level(value: Any, gender: Any, rules: Iterable[CustomRule]) -> EvaluationResult:
     """專用性別規則優先、各群組依列表順序採 first match wins。"""
-    ordered = [rule for rule in rules if rule.enabled]
+    ordered = list(rules)
     normalized_gender = str(gender).strip() if gender is not None else ""
     groups: list[list[CustomRule]] = []
     if normalized_gender in {"男", "女"}:
@@ -120,14 +120,12 @@ def rules_overlap(first: CustomRule, second: CustomRule) -> bool:
 
 
 def find_rule_conflicts(rules: list[CustomRule]) -> list[RuleConflict]:
-    """只比較相同欄位、相同性別群組內的啟用規則。"""
+    """只比較相同欄位、相同性別群組內的規則。"""
     conflicts: list[RuleConflict] = []
     for first_index, first in enumerate(rules):
-        if not first.enabled:
-            continue
         for second_index in range(first_index + 1, len(rules)):
             second = rules[second_index]
-            if not second.enabled or first.column != second.column or first.gender != second.gender:
+            if first.column != second.column or first.gender != second.gender:
                 continue
             if not rules_overlap(first, second):
                 continue
@@ -146,10 +144,10 @@ def find_override_pairs(rules: list[CustomRule]) -> list[tuple[int, int]]:
     """找出男／女專用規則與同欄共用規則可能同時命中的組合。"""
     pairs: list[tuple[int, int]] = []
     for specific_index, specific in enumerate(rules):
-        if not specific.enabled or specific.gender not in {"男", "女"}:
+        if specific.gender not in {"男", "女"}:
             continue
         for common_index, common in enumerate(rules):
-            if common.enabled and common.gender == "共用" and specific.column == common.column and rules_overlap(specific, common):
+            if common.gender == "共用" and specific.column == common.column and rules_overlap(specific, common):
                 pairs.append((specific_index, common_index))
     return pairs
 
