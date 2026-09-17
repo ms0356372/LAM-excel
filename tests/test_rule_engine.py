@@ -10,7 +10,8 @@ from rule_engine import (
     find_rule_conflicts,
     rules_overlap,
 )
-from rule_models import CustomRule
+from rule_models import CustomRule, format_rule_condition
+from rule_view import collect_rule_statuses, filter_rule_indexes
 
 
 def rule(operator, level="第一級", gender="共用", value=None, minimum=None, maximum=None, column="A"):
@@ -125,3 +126,45 @@ def test_disabled_rules_are_not_conflicts_and_override_is_separate():
     disabled.enabled = False
     assert find_rule_conflicts([common, male, disabled]) == []
     assert find_override_pairs([common, male, disabled]) == [(1, 0)]
+
+
+def test_shared_condition_formatting():
+    assert format_rule_condition(rule("range", minimum=1, maximum=10)) == "1 ～ 10"
+    assert format_rule_condition(rule(">=", value=90)) == ">= 90"
+    assert format_rule_condition(rule("exact", value="++")) == "完全相符：++"
+
+
+def test_rule_view_search_filters_and_statuses():
+    rules = [
+        rule(">", "第二級", value=10, column="M"),
+        rule(">", "第三級", value=20, column="M"),
+        rule(">=", "第三級", "男", value=90, column="N"),
+    ]
+    headers = {"M": "BMI", "N": "腰圍"}
+    statuses = collect_rule_statuses(rules, {"M", "N"})
+    assert statuses[0].severity == statuses[1].severity == "warning"
+    assert "規則重疊" in statuses[0].messages
+    assert filter_rule_indexes(rules, statuses, headers, search="BMI") == [0, 1]
+    assert filter_rule_indexes(rules, statuses, headers, gender="男") == [2]
+    assert filter_rule_indexes(rules, statuses, headers, level="第三級") == [1, 2]
+    assert filter_rule_indexes(rules, statuses, headers, status="警告") == [0, 1]
+
+
+def test_rule_view_reports_duplicate_override_and_missing_column():
+    common = rule(">=", "第二級", value=80, column="N")
+    duplicate = rule(">=", "第二級", value=80, column="N")
+    male = rule(">=", "第三級", "男", value=90, column="N")
+    missing = rule("exact", value="++", column="O")
+    statuses = collect_rule_statuses([common, duplicate, male, missing], {"N"})
+    assert "完全重複" in statuses[0].messages
+    assert "與共用規則重疊" in statuses[2].messages
+    assert statuses[3].severity == "error"
+    assert statuses[3].text == "⚠ 欄位不存在"
+
+
+def test_rule_view_reuses_model_validation_for_invalid_conditions():
+    bad_range = CustomRule("A", "共用", "range", "第一級", minimum=10, maximum=1)
+    bad_number = CustomRule("B", "共用", ">", "第一級", value="not-a-number")
+    statuses = collect_rule_statuses([bad_range, bad_number])
+    assert statuses[0].messages == ("區間異常",)
+    assert statuses[1].messages == ("數值條件錯誤",)

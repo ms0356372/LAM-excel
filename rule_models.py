@@ -67,9 +67,7 @@ class CustomRule:
 
     @property
     def condition_text(self) -> str:
-        if self.operator == "range":
-            return f"{_display_number(self.minimum)} ～ {_display_number(self.maximum)}"
-        return f"{self.operator if self.operator != 'exact' else ''}{self.value}"
+        return format_rule_condition(self)
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -104,3 +102,12 @@ def _number(value: Any, name: str) -> float:
 def _display_number(value: Any) -> str:
     number = float(value)
     return str(int(number)) if number.is_integer() else str(number)
+
+
+def format_rule_condition(rule: CustomRule) -> str:
+    """將規則條件轉為列表、總覽及警告訊息共用的使用者文字。"""
+    if rule.operator == "range":
+        return f"{_display_number(rule.minimum)} ～ {_display_number(rule.maximum)}"
+    if rule.operator == "exact":
+        return f"完全相符：{str(rule.value).strip()}"
+    return f"{rule.operator} {_display_number(rule.value)}"

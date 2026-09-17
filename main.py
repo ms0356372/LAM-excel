@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, ttk
 
 import customtkinter as ctk
 
@@ -32,7 +32,9 @@ from rule_models import (
     OPERATOR_LABELS,
     VALID_GENDERS,
     CustomRule,
+    format_rule_condition,
 )
+from rule_view import collect_rule_statuses, filter_rule_indexes
 
 
 ctk.set_appearance_mode("System")
@@ -150,6 +152,9 @@ CUSTOM_HELP_SECTIONS = [
     ("完全相符範例", "++ → 第二級\n代謝症候群 → 第四級\n比較前會移除前後空白，但不是模糊搜尋。"),
     ("男女設定", "共用：男女皆使用。\n男／女：只套用相同性別。專用規則先判斷；若沒有符合，再使用共用規則。"),
     ("規則順序與衝突", "同一欄位與同一性別群組由上至下判斷，第一個符合的規則為準。可用上移／下移調整順序。新增或編輯時會精確檢查重疊；完全相同規則不得重複，其他重疊可由使用者確認後保存，列表會顯示 ⚠。開始整理前也會再次確認。男女專用規則與共用規則可能同時命中時只屬覆寫提醒，專用規則仍優先。"),
+    ("規則列表", "規則列表可查看全部自訂規則，並可搜尋及依性別、分級、狀態與啟用狀態篩選。"),
+    ("規則狀態", "狀態欄可協助檢查規則重疊、完全重複、相同條件不同分級、欄位不存在等問題；選取規則後可查看完整狀態。"),
+    ("規則總覽", "規則總覽會依欄位 → 性別 → 判斷順序整理規則，適合人工檢查單一欄位的完整分級邏輯。總覽順序就是實際 first match wins 判斷順序。"),
     ("注意事項", "空白儲存格會跳過。數值規則遇到無法轉換的文字不會判斷成功，也不會中斷。規則可存成 JSON；損壞的 JSON 不會阻止程式啟動。"),
 ]
 
@@ -603,6 +608,7 @@ class ExcelOrganizerApp(ctk.CTk):
         self.rules: list[CustomRule] = []
         self.worksheet_headers: dict[int, str] = {}
         self.help_window: ctk.CTkToplevel | None = None
+        self.rules_overview_window: ctk.CTkToplevel | None = None
         self._build_ui()
         self._load_default_rules()
         self.after(100, self._poll_queue)
@@ -662,12 +668,47 @@ class ExcelOrganizerApp(ctk.CTk):
         toolbar.grid(row=0, column=0, sticky="ew", padx=8, pady=(6, 3)); toolbar.grid_columnconfigure(1, weight=1)
         ctk.CTkLabel(toolbar, text="分析資料範圍").grid(row=0, column=0, padx=(4, 8))
         ctk.CTkEntry(toolbar, textvariable=self.range_var).grid(row=0, column=1, sticky="ew")
-        for index, (text, command) in enumerate((("新增規則", self.add_rule), ("儲存規則", self.save_rules_dialog), ("載入規則", self.load_rules_dialog)), start=2):
+        for index, (text, command) in enumerate((("新增規則", self.add_rule), ("儲存規則", self.save_rules_dialog), ("載入規則", self.load_rules_dialog), ("規則總覽", self.show_rules_overview)), start=2):
             ctk.CTkButton(toolbar, text=text, width=90, command=command).grid(row=0, column=index, padx=(8, 0))
-        ctk.CTkLabel(tab, text="分級規則設定（專用性別優先；同群組由上至下 first match wins）", font=ctk.CTkFont(weight="bold")).grid(row=1, column=0, sticky="w", padx=12, pady=(2, 3))
-        self.rules_frame = ctk.CTkScrollableFrame(tab, height=190)
-        self.rules_frame.grid(row=2, column=0, sticky="ew", padx=8, pady=(0, 6))
-        self.rules_frame.grid_columnconfigure(3, weight=1)
+        filters = ctk.CTkFrame(tab)
+        filters.grid(row=1, column=0, sticky="ew", padx=8, pady=3)
+        self.rule_search_var = tk.StringVar(); self.rule_gender_filter = tk.StringVar(value="全部")
+        self.rule_level_filter = tk.StringVar(value="全部"); self.rule_status_filter = tk.StringVar(value="全部")
+        self.rule_enabled_filter = tk.StringVar(value="全部")
+        ctk.CTkLabel(filters, text="搜尋").pack(side="left", padx=(8, 3))
+        search = ctk.CTkEntry(filters, textvariable=self.rule_search_var, width=170); search.pack(side="left", padx=(0, 8))
+        self.rule_search_var.trace_add("write", lambda *_: self._refresh_rules())
+        for label, variable, values in (
+            ("性別", self.rule_gender_filter, ["全部", "共用", "男", "女"]),
+            ("分級", self.rule_level_filter, ["全部", *LEVEL_HEADERS]),
+            ("狀態", self.rule_status_filter, ["全部", "正常", "警告", "錯誤"]),
+            ("啟用", self.rule_enabled_filter, ["全部", "已啟用", "已停用"]),
+        ):
+            ctk.CTkLabel(filters, text=label).pack(side="left", padx=(4, 2))
+            ctk.CTkComboBox(filters, variable=variable, values=values, state="readonly", width=92, command=lambda _=None: self._refresh_rules()).pack(side="left", padx=(0, 3))
+
+        table_box = ctk.CTkFrame(tab)
+        table_box.grid(row=2, column=0, sticky="ew", padx=8, pady=(0, 3)); table_box.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(table_box, text="規則列表（依實際 first match wins 順序）", font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, sticky="w", padx=8, pady=4)
+        columns = ("order", "enabled", "column", "header", "gender", "operator", "condition", "level", "status")
+        self.rules_tree = ttk.Treeview(table_box, columns=columns, show="headings", height=7, selectmode="browse")
+        headings = ("順序", "啟用", "欄位", "表頭", "性別", "判斷方式", "條件", "分級", "狀態")
+        widths = (48, 48, 52, 105, 52, 72, 130, 68, 150)
+        for key, heading, width in zip(columns, headings, widths):
+            self.rules_tree.heading(key, text=heading); self.rules_tree.column(key, width=width, minwidth=40, anchor="w")
+        scrollbar = ttk.Scrollbar(table_box, orient="vertical", command=self.rules_tree.yview)
+        self.rules_tree.configure(yscrollcommand=scrollbar.set)
+        self.rules_tree.grid(row=1, column=0, sticky="ew", padx=(8, 0)); scrollbar.grid(row=1, column=1, sticky="ns", padx=(0, 8))
+        self.rules_tree.tag_configure("warning", background="#fff3cd"); self.rules_tree.tag_configure("error", background="#f8d7da")
+        self.rules_tree.bind("<Double-1>", lambda _event: self._edit_selected_rule())
+        self.rules_tree.bind("<<TreeviewSelect>>", lambda _event: self._show_selected_status())
+        self.rules_summary = ctk.CTkLabel(table_box, text="", anchor="w")
+        self.rules_summary.grid(row=2, column=0, columnspan=2, sticky="ew", padx=8, pady=(3, 0))
+        self.rule_status_detail = ctk.CTkLabel(table_box, text="", anchor="w", text_color=("gray35", "gray70"))
+        self.rule_status_detail.grid(row=3, column=0, columnspan=2, sticky="ew", padx=8)
+        actions = ctk.CTkFrame(table_box, fg_color="transparent"); actions.grid(row=4, column=0, columnspan=2, pady=4)
+        for text, command in (("新增規則", self.add_rule), ("編輯規則", self._edit_selected_rule), ("刪除規則", self._delete_selected_rule), ("上移", lambda: self._move_selected_rule(-1)), ("下移", lambda: self._move_selected_rule(1)), ("啟用／停用", self._toggle_selected_rule), ("重新整理", self._refresh_rules)):
+            ctk.CTkButton(actions, text=text, width=82, height=27, command=command).pack(side="left", padx=3)
 
     def _current_mode(self) -> str:
         return self.tabs.get()
@@ -684,30 +725,57 @@ class ExcelOrganizerApp(ctk.CTk):
         self._refresh_rules()
 
     def _refresh_rules(self) -> None:
-        for child in self.rules_frame.winfo_children(): child.destroy()
-        conflict_indexes = {
-            index
-            for conflict in find_rule_conflicts(self.rules)
-            for index in (conflict.first_index, conflict.second_index)
-        }
-        headings = ("啟用", "欄位", "表頭", "性別", "判斷方式", "條件", "分級", "操作")
-        for col, heading in enumerate(headings):
-            ctk.CTkLabel(self.rules_frame, text=heading, font=ctk.CTkFont(weight="bold")).grid(row=0, column=col, padx=5, pady=4, sticky="w")
-        if not self.rules:
-            ctk.CTkLabel(self.rules_frame, text="尚未建立規則，請按「新增規則」。", text_color=("gray45", "gray65")).grid(row=1, column=0, columnspan=8, pady=18)
+        if not hasattr(self, "rules_tree"):
             return
-        for row, rule in enumerate(self.rules, start=1):
-            enabled = tk.BooleanVar(value=rule.enabled)
-            ctk.CTkCheckBox(self.rules_frame, text="", width=24, variable=enabled, command=lambda r=rule, v=enabled: self._toggle_rule(r, v)).grid(row=row, column=0, padx=5)
-            col_index = column_letter_to_index(rule.column)
-            header = self.worksheet_headers.get(col_index, "") or "—"
-            column_text = f"⚠ {rule.column}" if row - 1 in conflict_indexes else rule.column
-            values = (column_text, header, rule.gender, OPERATOR_LABELS[rule.operator], rule.condition_text, rule.level)
-            for col, value in enumerate(values, start=1): ctk.CTkLabel(self.rules_frame, text=str(value), anchor="w").grid(row=row, column=col, padx=5, pady=3, sticky="w")
-            buttons = ctk.CTkFrame(self.rules_frame, fg_color="transparent")
-            buttons.grid(row=row, column=7, padx=3)
-            for text, command in (("編輯", lambda i=row-1: self.edit_rule(i)), ("刪除", lambda i=row-1: self.delete_rule(i)), ("↑", lambda i=row-1: self.move_rule(i, -1)), ("↓", lambda i=row-1: self.move_rule(i, 1))):
-                ctk.CTkButton(buttons, text=text, width=42, height=25, command=command).pack(side="left", padx=2)
+        self.rules_tree.delete(*self.rules_tree.get_children())
+        headers = {rule.column: self.worksheet_headers.get(column_letter_to_index(rule.column), "") for rule in self.rules}
+        available = {column_index_to_letter(index) for index in self.worksheet_headers} if self.worksheet_headers else None
+        self.rule_statuses = collect_rule_statuses(self.rules, available)
+        indexes = filter_rule_indexes(
+            self.rules, self.rule_statuses, headers, self.rule_search_var.get(),
+            self.rule_gender_filter.get(), self.rule_level_filter.get(),
+            self.rule_status_filter.get(), self.rule_enabled_filter.get(),
+        )
+        for index in indexes:
+            rule = self.rules[index]; status = self.rule_statuses[index]
+            values = (index + 1, "是" if rule.enabled else "否", rule.column, headers[rule.column] or "—", rule.gender,
+                      OPERATOR_LABELS[rule.operator], format_rule_condition(rule), rule.level, status.text)
+            self.rules_tree.insert("", "end", iid=str(index), values=values, tags=(status.severity,))
+        enabled_count = sum(rule.enabled for rule in self.rules)
+        warnings = sum(status.severity == "warning" for status in self.rule_statuses)
+        errors = sum(status.severity == "error" for status in self.rule_statuses)
+        self.rules_summary.configure(text=f"總規則 {len(self.rules)} 條｜已啟用 {enabled_count}｜停用 {len(self.rules)-enabled_count}｜警告 {warnings}｜錯誤 {errors}｜目前顯示 {len(indexes)}")
+        self.rule_status_detail.configure(text="")
+        if self.rules_overview_window is not None and self.rules_overview_window.winfo_exists():
+            self._refresh_rules_overview()
+
+    def _selected_rule_index(self) -> int | None:
+        selection = self.rules_tree.selection()
+        return int(selection[0]) if selection else None
+
+    def _edit_selected_rule(self) -> None:
+        index = self._selected_rule_index()
+        if index is not None: self.edit_rule(index)
+
+    def _delete_selected_rule(self) -> None:
+        index = self._selected_rule_index()
+        if index is not None: self.delete_rule(index)
+
+    def _move_selected_rule(self, delta: int) -> None:
+        index = self._selected_rule_index()
+        if index is not None: self.move_rule(index, delta)
+
+    def _toggle_selected_rule(self) -> None:
+        index = self._selected_rule_index()
+        if index is not None:
+            self.rules[index].enabled = not self.rules[index].enabled
+            self._auto_save(); self._refresh_rules()
+
+    def _show_selected_status(self) -> None:
+        index = self._selected_rule_index()
+        if index is None: return
+        messages = self.rule_statuses[index].messages
+        self.rule_status_detail.configure(text="完整狀態：" + ("、".join(messages) if messages else "正常"))
 
     def _toggle_rule(self, rule: CustomRule, variable: tk.BooleanVar) -> None:
         rule.enabled = variable.get(); self._auto_save(); self._refresh_rules()
@@ -783,11 +851,11 @@ class ExcelOrganizerApp(ctk.CTk):
     def _format_conflict_message(self, rules: list[CustomRule], saved_index: int, conflicts, override_count: int) -> str:
         current = rules[saved_index]
         header = self.worksheet_headers.get(column_letter_to_index(current.column), "") or current.column
-        lines = [f"欄位：{header}", f"目前規則：{current.condition_text} → {current.level}"]
+        lines = [f"欄位：{header}", f"目前規則：{format_rule_condition(current)} → {current.level}"]
         for conflict in conflicts:
             other_index = conflict.second_index if conflict.first_index == saved_index else conflict.first_index
             other = rules[other_index]
-            lines.append(f"衝突規則：{other.condition_text} → {other.level}")
+            lines.append(f"衝突規則：{format_rule_condition(other)} → {other.level}")
             if conflict.is_same_condition:
                 lines.append("原因：相同條件被設定為不同分級。")
             else:
@@ -843,6 +911,69 @@ class ExcelOrganizerApp(ctk.CTk):
         if path:
             try: self.rules = load_rules(path); self._auto_save(); self._refresh_rules(); self._append_log(f"[OK] 已載入 {len(self.rules)} 條規則。")
             except ValueError as exc: self.show_error_message(str(exc))
+
+    def show_rules_overview(self) -> None:
+        if self.rules_overview_window is not None and self.rules_overview_window.winfo_exists():
+            self.rules_overview_window.deiconify(); self.rules_overview_window.lift(); self.rules_overview_window.focus_force(); return
+        window = ctk.CTkToplevel(self); self.rules_overview_window = window
+        window.title("自訂分級－規則總覽"); window.geometry("800x650"); window.minsize(650, 480); window.transient(self)
+        window.grid_columnconfigure(0, weight=1); window.grid_rowconfigure(1, weight=1)
+        controls = ctk.CTkFrame(window); controls.grid(row=0, column=0, sticky="ew", padx=14, pady=(14, 5))
+        self.overview_search_var = tk.StringVar(); self.overview_warning_var = tk.StringVar(value="全部")
+        self.overview_gender_var = tk.StringVar(value="全部"); self.overview_disabled_var = tk.BooleanVar(value=False)
+        ctk.CTkLabel(controls, text="搜尋").pack(side="left", padx=(8, 3))
+        ctk.CTkEntry(controls, textvariable=self.overview_search_var, width=200).pack(side="left", padx=(0, 10))
+        ctk.CTkLabel(controls, text="顯示").pack(side="left", padx=3)
+        ctk.CTkComboBox(controls, variable=self.overview_warning_var, values=["全部", "僅有警告"], state="readonly", width=110, command=lambda _=None: self._refresh_rules_overview()).pack(side="left", padx=3)
+        ctk.CTkLabel(controls, text="性別").pack(side="left", padx=3)
+        ctk.CTkComboBox(controls, variable=self.overview_gender_var, values=["全部", "共用", "男", "女"], state="readonly", width=85, command=lambda _=None: self._refresh_rules_overview()).pack(side="left", padx=3)
+        ctk.CTkCheckBox(controls, text="顯示停用規則", variable=self.overview_disabled_var, command=self._refresh_rules_overview).pack(side="left", padx=8)
+        self.overview_search_var.trace_add("write", lambda *_: self._refresh_rules_overview())
+        self.overview_text = ctk.CTkTextbox(window, wrap="word")
+        self.overview_text.grid(row=1, column=0, sticky="nsew", padx=14, pady=(5, 8))
+        ctk.CTkButton(window, text="關閉", command=self.close_rules_overview).grid(row=2, column=0, pady=(0, 14))
+        window.protocol("WM_DELETE_WINDOW", self.close_rules_overview)
+        self._refresh_rules_overview(); window.lift(); window.focus_force()
+
+    def _refresh_rules_overview(self) -> None:
+        if self.rules_overview_window is None or not self.rules_overview_window.winfo_exists(): return
+        available = {column_index_to_letter(index) for index in self.worksheet_headers} if self.worksheet_headers else None
+        statuses = collect_rule_statuses(self.rules, available)
+        needle = self.overview_search_var.get().strip().casefold(); warning_only = self.overview_warning_var.get() == "僅有警告"
+        gender_filter = self.overview_gender_var.get(); show_disabled = self.overview_disabled_var.get()
+        columns: list[str] = []
+        for rule in self.rules:
+            if rule.column not in columns: columns.append(rule.column)
+        blocks: list[str] = []
+        for column in columns:
+            indexes = [index for index, rule in enumerate(self.rules) if rule.column == column and (rule.enabled or show_disabled)]
+            if gender_filter != "全部": indexes = [index for index in indexes if self.rules[index].gender == gender_filter]
+            if warning_only: indexes = [index for index in indexes if statuses[index].severity != "normal"]
+            header = self.worksheet_headers.get(column_letter_to_index(column), "") or "（尚未載入表頭）"
+            if needle:
+                column_match = needle in f"{column} {header}".casefold()
+                indexes = [index for index in indexes if column_match or needle in " ".join((self.rules[index].gender, format_rule_condition(self.rules[index]), self.rules[index].level, statuses[index].text)).casefold()]
+            if not indexes: continue
+            warnings = sorted({message for index in indexes for message in statuses[index].messages})
+            lines = ["━" * 24, f"{column} - {header}"]
+            if warnings: lines.append(f"⚠ 此欄位存在規則警告：{'、'.join(warnings)}")
+            lines.append("━" * 24)
+            for gender in VALID_GENDERS:
+                gender_indexes = [index for index in indexes if self.rules[index].gender == gender]
+                if not gender_indexes: continue
+                lines.extend(("", f"【{gender}】", ""))
+                for index in gender_indexes:
+                    rule = self.rules[index]; suffix = "（已停用）" if not rule.enabled else ""
+                    lines.append(f"{format_rule_condition(rule)} {suffix}".rstrip()); lines.append(f"→ {rule.level}")
+                    if statuses[index].messages: lines.append("⚠ " + "、".join(statuses[index].messages))
+                    lines.append("")
+            blocks.append("\n".join(lines))
+        content = "\n\n".join(blocks) or "沒有符合目前搜尋／篩選條件的規則。"
+        self.overview_text.configure(state="normal"); self.overview_text.delete("1.0", "end"); self.overview_text.insert("end", content); self.overview_text.configure(state="disabled")
+
+    def close_rules_overview(self) -> None:
+        if self.rules_overview_window is not None:
+            self.rules_overview_window.destroy(); self.rules_overview_window = None
 
     def show_help_window(self) -> None:
         if self.help_window is not None and self.help_window.winfo_exists(): self.help_window.lift(); return
