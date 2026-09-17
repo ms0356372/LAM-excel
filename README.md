@@ -73,18 +73,46 @@ python main.py
 
 5. 若 VS Code 找不到正確 Python，請執行 `Python: Select Interpreter` 並選擇 `.venv`。
 
-## 5. PyInstaller 打包方式
+## EXE 打包方式
+
+Windows 使用者可直接雙擊專案根目錄中的：
+
+```text
+build_exe.bat
+```
+
+批次檔會自動：
+
+1. 切換到專案目錄並檢查 `main.py`。
+2. 檢查 Python；若存在 `.venv\Scripts\python.exe`，後續指令會優先使用該虛擬環境。
+3. 依 `requirements.txt` 檢查及安裝相依套件。
+4. 檢查 PyInstaller，缺少時自動安裝並再次驗證。
+5. 清除舊的 `build`、`dist` 及本程式的舊 release EXE；不刪除 `release` 中的其他檔案。
+6. 使用既有的 `Excel管理級數整理工具.spec` 執行 PyInstaller 打包。
+7. 驗證 PyInstaller 回傳結果、EXE 是否存在及檔案大小是否大於 0。
+8. 將完成的 EXE 複製到 `release`。
+9. 確認 release EXE 有效後，清除本次打包產生的 `build` 與 `dist`；若打包失敗則保留它們供除錯。
+
+最終成品位於：
+
+```text
+release\Excel管理級數整理工具.exe
+```
+
+無論成功或失敗，批次檔最後都會等待按鍵，不會直接關閉視窗。畫面中的 `[INFO]`、`[OK]`、`[WARNING]`、`[BUILD]` 與 `[ERROR]` 可用來判斷目前階段。
+
+### 手動使用 PyInstaller
 
 基本打包指令：
 
 ```bash
-pyinstaller --onefile --windowed --name Excel管理級數整理工具 main.py
+python -m PyInstaller --onefile --windowed --name Excel管理級數整理工具 main.py
 ```
 
 若遇到 pywin32 hook 未自動收集的環境，可使用較保守的打包方式：
 
 ```bash
-pyinstaller --onefile --windowed --name Excel管理級數整理工具 --hidden-import win32timezone --hidden-import pythoncom --hidden-import win32com --hidden-import win32com.client main.py
+python -m PyInstaller --onefile --windowed --name Excel管理級數整理工具 --hidden-import win32timezone --hidden-import pythoncom --hidden-import win32com --hidden-import win32com.client main.py
 ```
 
 打包後執行檔會位於：
