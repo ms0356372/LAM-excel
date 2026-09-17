@@ -4,3 +4,5 @@ build/
 dist/
 release/
 *.pyc
+
+custom_rules.json
