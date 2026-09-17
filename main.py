@@ -16,7 +16,13 @@ from pathlib import Path
 from typing import Any
 
 import tkinter as tk
-from tkinter import filedialog, messagebox, scrolledtext, ttk
+from tkinter import filedialog, messagebox
+
+import customtkinter as ctk
+
+
+ctk.set_appearance_mode("System")
+ctk.set_default_color_theme("blue")
 
 
 DEFAULT_RANGE = "M1:R2000"
@@ -431,62 +437,112 @@ class ExcelProcessor:
         return stats
 
 
-class ExcelOrganizerApp(tk.Tk):
-    """tkinter GUI 主視窗。"""
+class ExcelOrganizerApp(ctk.CTk):
+    """CustomTkinter GUI 主視窗。"""
 
     def __init__(self) -> None:
         super().__init__()
         self.title("Excel 管理級數整理工具")
-        self.geometry("850x620")
+        self.geometry("920x720")
+        self.minsize(720, 600)
         self.message_queue: queue.Queue[tuple[str, Any]] = queue.Queue()
         self.file_path_var = tk.StringVar()
         self.output_path_var = tk.StringVar()
         self.range_var = tk.StringVar(value=DEFAULT_RANGE)
         self.worksheet_var = tk.StringVar()
+        self.help_window: ctk.CTkToplevel | None = None
         self._build_ui()
         self.after(100, self._poll_queue)
 
     def _build_ui(self) -> None:
-        padding = {"padx": 10, "pady": 6}
-        ttk.Button(self, text="選擇 Excel 檔案", command=self.select_excel_file).grid(row=0, column=0, sticky="w", **padding)
-        ttk.Entry(self, textvariable=self.file_path_var, width=90).grid(row=0, column=1, columnspan=2, sticky="ew", **padding)
-        ttk.Label(self, text="工作表：").grid(row=1, column=0, sticky="w", **padding)
-        self.sheet_combo = ttk.Combobox(self, textvariable=self.worksheet_var, state="readonly", width=40)
-        self.sheet_combo.grid(row=1, column=1, sticky="w", **padding)
-        ttk.Label(self, text="資料範圍：").grid(row=2, column=0, sticky="w", **padding)
-        ttk.Entry(self, textvariable=self.range_var, width=40).grid(row=2, column=1, sticky="w", **padding)
-        ttk.Button(self, text="選擇輸出檔案", command=self.select_output_file).grid(row=3, column=0, sticky="w", **padding)
-        ttk.Entry(self, textvariable=self.output_path_var, width=90).grid(row=3, column=1, columnspan=2, sticky="ew", **padding)
-        self.start_button = ttk.Button(self, text="開始整理", command=self.start_processing)
-        self.start_button.grid(row=4, column=0, sticky="w", **padding)
-        self.progress = ttk.Progressbar(self, mode="determinate")
-        self.progress.grid(row=4, column=1, columnspan=2, sticky="ew", **padding)
-        ttk.Label(self, text="狀態 / 執行紀錄：").grid(row=5, column=0, sticky="nw", **padding)
-        self.log_text = tk.Text(self, height=22, wrap="word")
-        self.log_text.grid(row=5, column=1, columnspan=2, sticky="nsew", **padding)
-        ttk.Button(self, text="使用說明", command=self.show_help_window).grid(row=6, column=2, sticky="e", **padding)
-        self.columnconfigure(1, weight=1)
-        self.rowconfigure(5, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(2, weight=1)
+
+        header = ctk.CTkFrame(self, fg_color="transparent")
+        header.grid(row=0, column=0, sticky="ew", padx=24, pady=(20, 12))
+        header.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(header, text="Excel 管理級數整理工具", font=ctk.CTkFont(size=24, weight="bold")).grid(row=0, column=0, sticky="w")
+        ctk.CTkButton(header, text="使用說明", width=100, command=self.show_help_window).grid(row=0, column=1, sticky="e")
+
+        settings = ctk.CTkFrame(self, corner_radius=12)
+        settings.grid(row=1, column=0, sticky="ew", padx=24, pady=(0, 14))
+        settings.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(settings, text="整理設定", font=ctk.CTkFont(size=16, weight="bold")).grid(row=0, column=0, columnspan=3, sticky="w", padx=20, pady=(16, 10))
+
+        ctk.CTkLabel(settings, text="Excel 檔案", anchor="w").grid(row=1, column=0, sticky="w", padx=(20, 12), pady=7)
+        ctk.CTkEntry(settings, textvariable=self.file_path_var).grid(row=1, column=1, sticky="ew", pady=7)
+        ctk.CTkButton(settings, text="選擇檔案", width=110, command=self.select_excel_file).grid(row=1, column=2, padx=(12, 20), pady=7)
+
+        ctk.CTkLabel(settings, text="工作表", anchor="w").grid(row=2, column=0, sticky="w", padx=(20, 12), pady=7)
+        self.sheet_combo = ctk.CTkComboBox(settings, variable=self.worksheet_var, values=[], state="readonly")
+        self.sheet_combo.grid(row=2, column=1, sticky="ew", pady=7)
+
+        ctk.CTkLabel(settings, text="資料範圍", anchor="w").grid(row=3, column=0, sticky="w", padx=(20, 12), pady=7)
+        ctk.CTkEntry(settings, textvariable=self.range_var).grid(row=3, column=1, sticky="ew", pady=7)
+        ctk.CTkLabel(settings, text="例：M1:R2000", text_color=("gray45", "gray65")).grid(row=3, column=2, sticky="w", padx=(12, 20), pady=7)
+
+        ctk.CTkLabel(settings, text="輸出檔案", anchor="w").grid(row=4, column=0, sticky="w", padx=(20, 12), pady=(7, 18))
+        ctk.CTkEntry(settings, textvariable=self.output_path_var).grid(row=4, column=1, sticky="ew", pady=(7, 18))
+        ctk.CTkButton(settings, text="選擇輸出位置", width=110, command=self.select_output_file).grid(row=4, column=2, padx=(12, 20), pady=(7, 18))
+
+        activity = ctk.CTkFrame(self, corner_radius=12)
+        activity.grid(row=2, column=0, sticky="nsew", padx=24, pady=(0, 20))
+        activity.grid_columnconfigure(0, weight=1)
+        activity.grid_rowconfigure(3, weight=1)
+        self.start_button = ctk.CTkButton(activity, text="開始整理", height=44, corner_radius=8, font=ctk.CTkFont(size=15, weight="bold"), command=self.start_processing)
+        self.start_button.grid(row=0, column=0, sticky="ew", padx=20, pady=(18, 12))
+        self.progress = ctk.CTkProgressBar(activity, mode="determinate")
+        self.progress.grid(row=1, column=0, sticky="ew", padx=20, pady=(0, 16))
+        self.progress.set(0)
+        ctk.CTkLabel(activity, text="執行紀錄", font=ctk.CTkFont(size=15, weight="bold")).grid(row=2, column=0, sticky="w", padx=20, pady=(0, 8))
+        self.log_text = ctk.CTkTextbox(activity, wrap="word", corner_radius=8)
+        self.log_text.grid(row=3, column=0, sticky="nsew", padx=20, pady=(0, 18))
 
     def show_help_window(self) -> None:
-        """開啟不影響主程式操作的可捲動使用說明視窗。"""
-        help_window = tk.Toplevel(self)
-        help_window.title("Excel 管理級數整理工具－使用說明")
-        help_window.geometry("700x600")
-        help_window.minsize(520, 400)
+        """開啟唯一且附屬於主視窗的 modal 使用說明視窗。"""
+        if self.help_window is not None and self.help_window.winfo_exists():
+            self.help_window.deiconify()
+            self.help_window.lift()
+            self.help_window.focus_force()
+            return
 
-        help_text = scrolledtext.ScrolledText(help_window, wrap="word", padx=18, pady=14)
-        help_text.grid(row=0, column=0, sticky="nsew", padx=10, pady=(10, 4))
-        help_text.tag_configure("heading", font=("TkDefaultFont", 12, "bold"), spacing1=12, spacing3=6)
-        help_text.tag_configure("body", spacing3=4)
+        self.help_window = ctk.CTkToplevel(self)
+        self.help_window.title("Excel 管理級數整理工具－使用說明")
+        self.help_window.geometry("700x600")
+        self.help_window.minsize(520, 400)
+        self.help_window.transient(self)
+        self.help_window.protocol("WM_DELETE_WINDOW", self.close_help_window)
+
+        help_text = ctk.CTkTextbox(self.help_window, wrap="word", corner_radius=8)
+        help_text.grid(row=0, column=0, sticky="nsew", padx=16, pady=(16, 8))
         for heading, body in HELP_SECTIONS:
-            help_text.insert("end", f"【{heading}】\n", "heading")
-            help_text.insert("end", body + "\n", "body")
+            help_text.insert("end", f"【{heading}】\n{body}\n\n")
         help_text.configure(state="disabled")
 
-        ttk.Button(help_window, text="關閉", command=help_window.destroy).grid(row=1, column=0, pady=(4, 10))
-        help_window.columnconfigure(0, weight=1)
-        help_window.rowconfigure(0, weight=1)
+        ctk.CTkButton(self.help_window, text="關閉", width=100, command=self.close_help_window).grid(row=1, column=0, pady=(4, 16))
+        self.help_window.columnconfigure(0, weight=1)
+        self.help_window.rowconfigure(0, weight=1)
+        self.help_window.grab_set()
+        self.help_window.lift()
+        self.help_window.focus_force()
+
+        def keep_help_window_in_front() -> None:
+            if self.help_window is not None and self.help_window.winfo_exists():
+                self.help_window.lift()
+                self.help_window.focus_force()
+
+        self.help_window.after(100, keep_help_window_in_front)
+
+    def close_help_window(self) -> None:
+        """釋放 modal 狀態、關閉說明視窗並清除視窗參考。"""
+        if self.help_window is None:
+            return
+        try:
+            self.help_window.grab_release()
+        except (tk.TclError, RuntimeError):
+            pass
+        self.help_window.destroy()
+        self.help_window = None
 
     def select_excel_file(self) -> None:
         file_path = filedialog.askopenfilename(title="選擇 Excel 檔案", filetypes=[("Excel files", "*.xlsx *.xlsm *.xls")])
@@ -494,7 +550,7 @@ class ExcelOrganizerApp(tk.Tk):
             return
         self.file_path_var.set(file_path)
         self.output_path_var.set(default_output_path(file_path))
-        self._append_log("正在載入工作表名稱...")
+        self._append_log("[INFO] 正在載入工作表名稱...")
         threading.Thread(target=self.load_worksheet_names, args=(file_path,), daemon=True).start()
 
     def load_worksheet_names(self, file_path: str) -> None:
@@ -514,9 +570,10 @@ class ExcelOrganizerApp(tk.Tk):
         if os.path.abspath(self.file_path_var.get() or "") == os.path.abspath(self.output_path_var.get() or ""):
             if not messagebox.askyesno("覆蓋確認", "輸出路徑與原始檔相同，確定要覆蓋嗎？"):
                 return
-        self.start_button.config(state="disabled")
-        self.progress.config(value=0, maximum=1)
-        self._append_log("開始整理...")
+            self._append_log("[WARNING] 輸出路徑與原始檔相同，將覆蓋原始檔案。")
+        self.start_button.configure(state="disabled")
+        self.progress.set(0)
+        self._append_log("[INFO] 開始整理...")
         args = (self.file_path_var.get(), self.worksheet_var.get(), self.range_var.get(), self.output_path_var.get())
         threading.Thread(target=self._worker_process, args=args, daemon=True).start()
 
@@ -532,23 +589,23 @@ class ExcelOrganizerApp(tk.Tk):
         while not self.message_queue.empty():
             kind, payload = self.message_queue.get()
             if kind == "sheets":
-                self.sheet_combo["values"] = payload
+                self.sheet_combo.configure(values=payload)
                 if payload:
                     self.worksheet_var.set(payload[0])
-                self._append_log("工作表名稱載入完成。")
+                self._append_log("[OK] 工作表名稱載入完成。")
             elif kind == "progress":
                 value, maximum = payload
-                self.progress.config(maximum=maximum, value=value)
+                self.progress.set(value / maximum if maximum else 0)
             elif kind == "log":
-                self._append_log(payload)
+                self._append_log("[INFO] " + payload)
             elif kind == "done":
-                self.start_button.config(state="normal")
-                self.progress.config(value=self.progress["maximum"])
+                self.start_button.configure(state="normal")
+                self.progress.set(1)
                 message = payload.to_message()
-                self._append_log(message)
+                self._append_log("[OK] 整理完成！\n" + message)
                 messagebox.showinfo("完成", "整理完成！\n\n" + message)
             elif kind == "error":
-                self.start_button.config(state="normal")
+                self.start_button.configure(state="normal")
                 self.show_error_message(payload)
         self.after(100, self._poll_queue)
 
@@ -557,7 +614,7 @@ class ExcelOrganizerApp(tk.Tk):
         self.log_text.see("end")
 
     def show_error_message(self, message: str) -> None:
-        self._append_log("錯誤：" + message)
+        self._append_log("[ERROR] " + message)
         messagebox.showerror("錯誤", message)
 
 
