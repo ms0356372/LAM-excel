@@ -11,7 +11,7 @@ set "RELEASE_DIR=%PROJECT_DIR%\release"
 set "RELEASE_EXE=%RELEASE_DIR%\%APP_NAME%.exe"
 
 echo ========================================
-echo  Excel 管理級數整理工具 - EXE 自動打包
+echo  Excel 管理級數整理工具 V2.0 - EXE 自動打包
 echo ========================================
 echo [INFO] 目前工作目錄：
 echo "%PROJECT_DIR%"
