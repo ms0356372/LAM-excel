@@ -2,7 +2,7 @@
 
 ## 1. 程式設計說明
 
-本工具是可在 Windows 執行的 Python 3.10+ GUI 程式，使用 `tkinter` 建立介面，並以 `pywin32` / `win32com.client` 建立獨立 Excel Application 執行個體。程式透過 Excel COM 直接讀取 `cell.Interior.ColorIndex`，因此可依 Excel 原生 `ColorIndex` 分類，而不是只依賴 `openpyxl` 的色碼。
+本工具是可在 Windows 執行的 Python 3.10+ GUI 程式，使用 `CustomTkinter` 建立可跟隨系統深淺色模式的現代化介面，並以 `pywin32` / `win32com.client` 建立獨立 Excel Application 執行個體。程式透過 Excel COM 直接讀取 `cell.Interior.ColorIndex`，因此可依 Excel 原生 `ColorIndex` 分類，而不是只依賴 `openpyxl` 的色碼。
 
 主要流程如下：
 
@@ -40,12 +40,12 @@
 
 ```bash
 python -m pip install --upgrade pip
-pip install pywin32 pyinstaller
+pip install -r requirements.txt
 ```
 
 如果看到 `No module named 'win32com'`，代表目前執行程式的 Python 環境尚未安裝 `pywin32`，或 VS Code 選到不同的 Python Interpreter；請在同一個環境重新執行上方安裝指令。
 
-本版本 GUI 使用 Python 內建 `tkinter`，不需要安裝 `customtkinter`。若你的 Python 發行版未包含 tkinter，請改安裝包含 Tcl/Tk 的官方 Python。
+本版本 GUI 使用 `customtkinter`，已列在 `requirements.txt`。建議統一透過上述指令安裝所有相依套件；若 Python 發行版未包含 tkinter，請改安裝包含 Tcl/Tk 的官方 Python。
 
 ## 4. VS Code 執行方式
 
@@ -60,7 +60,7 @@ python -m venv .venv
 3. 安裝套件：
 
 ```bash
-pip install pywin32 pyinstaller
+pip install -r requirements.txt
 ```
 
 若仍出現 `No module named 'win32com'`，請先確認 VS Code 右下角或 `Python: Select Interpreter` 顯示的是 `.venv`。
@@ -136,7 +136,7 @@ dist\Excel管理級數整理工具.exe
 
 ## 使用說明
 
-主程式底部提供「使用說明」按鈕。點擊後會開啟可上下捲動的獨立說明視窗，可查看：
+主程式右上方提供「使用說明」按鈕。點擊後會開啟可上下捲動的獨立說明視窗，可查看：
 
 - Excel 匯入格式
 - 必要表頭
