@@ -450,6 +450,7 @@ class ExcelOrganizerApp(ctk.CTk):
         self.output_path_var = tk.StringVar()
         self.range_var = tk.StringVar(value=DEFAULT_RANGE)
         self.worksheet_var = tk.StringVar()
+        self.help_window: ctk.CTkToplevel | None = None
         self._build_ui()
         self.after(100, self._poll_queue)
 
@@ -498,21 +499,50 @@ class ExcelOrganizerApp(ctk.CTk):
         self.log_text.grid(row=3, column=0, sticky="nsew", padx=20, pady=(0, 18))
 
     def show_help_window(self) -> None:
-        """開啟不影響主程式操作的可捲動使用說明視窗。"""
-        help_window = ctk.CTkToplevel(self)
-        help_window.title("Excel 管理級數整理工具－使用說明")
-        help_window.geometry("700x600")
-        help_window.minsize(520, 400)
+        """開啟唯一且附屬於主視窗的 modal 使用說明視窗。"""
+        if self.help_window is not None and self.help_window.winfo_exists():
+            self.help_window.deiconify()
+            self.help_window.lift()
+            self.help_window.focus_force()
+            return
 
-        help_text = ctk.CTkTextbox(help_window, wrap="word", corner_radius=8)
+        self.help_window = ctk.CTkToplevel(self)
+        self.help_window.title("Excel 管理級數整理工具－使用說明")
+        self.help_window.geometry("700x600")
+        self.help_window.minsize(520, 400)
+        self.help_window.transient(self)
+        self.help_window.protocol("WM_DELETE_WINDOW", self.close_help_window)
+
+        help_text = ctk.CTkTextbox(self.help_window, wrap="word", corner_radius=8)
         help_text.grid(row=0, column=0, sticky="nsew", padx=16, pady=(16, 8))
         for heading, body in HELP_SECTIONS:
             help_text.insert("end", f"【{heading}】\n{body}\n\n")
         help_text.configure(state="disabled")
 
-        ctk.CTkButton(help_window, text="關閉", width=100, command=help_window.destroy).grid(row=1, column=0, pady=(4, 16))
-        help_window.columnconfigure(0, weight=1)
-        help_window.rowconfigure(0, weight=1)
+        ctk.CTkButton(self.help_window, text="關閉", width=100, command=self.close_help_window).grid(row=1, column=0, pady=(4, 16))
+        self.help_window.columnconfigure(0, weight=1)
+        self.help_window.rowconfigure(0, weight=1)
+        self.help_window.grab_set()
+        self.help_window.lift()
+        self.help_window.focus_force()
+
+        def keep_help_window_in_front() -> None:
+            if self.help_window is not None and self.help_window.winfo_exists():
+                self.help_window.lift()
+                self.help_window.focus_force()
+
+        self.help_window.after(100, keep_help_window_in_front)
+
+    def close_help_window(self) -> None:
+        """釋放 modal 狀態、關閉說明視窗並清除視窗參考。"""
+        if self.help_window is None:
+            return
+        try:
+            self.help_window.grab_release()
+        except (tk.TclError, RuntimeError):
+            pass
+        self.help_window.destroy()
+        self.help_window = None
 
     def select_excel_file(self) -> None:
         file_path = filedialog.askopenfilename(title="選擇 Excel 檔案", filetypes=[("Excel files", "*.xlsx *.xlsm *.xls")])
