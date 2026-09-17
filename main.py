@@ -11,6 +11,8 @@ import queue
 import re
 import tempfile
 import threading
+from copy import deepcopy
+from datetime import datetime
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -35,6 +37,10 @@ from rule_models import (
     format_rule_condition,
 )
 from rule_view import collect_rule_statuses, filter_rule_indexes
+from rule_excel import (
+    RuleExcelError, create_rule_excel_template, export_rules_to_excel,
+    parse_rules_excel,
+)
 
 
 ctk.set_appearance_mode("System")
@@ -155,6 +161,8 @@ CUSTOM_HELP_SECTIONS = [
     ("規則列表", "規則列表可查看全部自訂規則，並可搜尋及依性別、分級、狀態與啟用狀態篩選。"),
     ("規則狀態", "狀態欄可協助檢查規則重疊、完全重複、相同條件不同分級、欄位不存在等問題；選取規則後可查看完整狀態。"),
     ("規則總覽", "規則總覽會依欄位 → 性別 → 判斷順序整理規則，適合人工檢查單一欄位的完整分級邏輯。總覽順序就是實際 first match wins 判斷順序。"),
+    ("Excel 匯出", "可將目前全部規則（包含停用規則）匯出成 Excel，方便大量檢查、修改、備份與交叉確認；沒有規則時可產生空白範本。"),
+    ("Excel 匯入", "匯入前會依序執行格式檢查、規則驗證、衝突檢查並顯示預覽，不會直接覆蓋。確認後可選擇取代全部或合併；大量修改前建議先使用備份規則。"),
     ("注意事項", "空白儲存格會跳過。數值規則遇到無法轉換的文字不會判斷成功，也不會中斷。規則可存成 JSON；損壞的 JSON 不會阻止程式啟動。"),
 ]
 
@@ -668,8 +676,8 @@ class ExcelOrganizerApp(ctk.CTk):
         toolbar.grid(row=0, column=0, sticky="ew", padx=8, pady=(6, 3)); toolbar.grid_columnconfigure(1, weight=1)
         ctk.CTkLabel(toolbar, text="分析資料範圍").grid(row=0, column=0, padx=(4, 8))
         ctk.CTkEntry(toolbar, textvariable=self.range_var).grid(row=0, column=1, sticky="ew")
-        for index, (text, command) in enumerate((("新增規則", self.add_rule), ("儲存規則", self.save_rules_dialog), ("載入規則", self.load_rules_dialog), ("規則總覽", self.show_rules_overview)), start=2):
-            ctk.CTkButton(toolbar, text=text, width=90, command=command).grid(row=0, column=index, padx=(8, 0))
+        for index, (text, command) in enumerate((("新增規則", self.add_rule), ("備份規則", self.save_rules_dialog), ("載入規則", self.load_rules_dialog), ("匯出 Excel", self.export_rules_excel_dialog), ("匯入 Excel", self.import_rules_excel_dialog), ("規則總覽", self.show_rules_overview)), start=2):
+            ctk.CTkButton(toolbar, text=text, width=82, command=command).grid(row=0, column=index, padx=(6, 0))
         filters = ctk.CTkFrame(tab)
         filters.grid(row=1, column=0, sticky="ew", padx=8, pady=3)
         self.rule_search_var = tk.StringVar(); self.rule_gender_filter = tk.StringVar(value="全部")
@@ -728,7 +736,7 @@ class ExcelOrganizerApp(ctk.CTk):
         if not hasattr(self, "rules_tree"):
             return
         self.rules_tree.delete(*self.rules_tree.get_children())
-        headers = {rule.column: self.worksheet_headers.get(column_letter_to_index(rule.column), "") for rule in self.rules}
+        headers = {rule.column: self.worksheet_headers.get(column_letter_to_index(rule.column), "") or rule.header for rule in self.rules}
         available = {column_index_to_letter(index) for index in self.worksheet_headers} if self.worksheet_headers else None
         self.rule_statuses = collect_rule_statuses(self.rules, available)
         indexes = filter_rule_indexes(
@@ -827,7 +835,7 @@ class ExcelOrganizerApp(ctk.CTk):
         def save() -> None:
             try:
                 column_name = column.get().split(" - ", 1)[0].strip().upper()
-                item = CustomRule(column_name, gender.get(), LABEL_TO_OPERATOR[operator.get()], level.get(), enabled=current.enabled if current else True, value=value.get(), minimum=minimum.get(), maximum=maximum.get()); item.validate()
+                item = CustomRule(column_name, gender.get(), LABEL_TO_OPERATOR[operator.get()], level.get(), enabled=current.enabled if current else True, value=value.get(), minimum=minimum.get(), maximum=maximum.get(), header=current.header if current else "", note=current.note if current else ""); item.validate()
             except (ValueError, KeyError) as exc:
                 messagebox.showerror("規則錯誤", str(exc), parent=window); return
             candidate_rules = list(self.rules)
@@ -911,6 +919,85 @@ class ExcelOrganizerApp(ctk.CTk):
         if path:
             try: self.rules = load_rules(path); self._auto_save(); self._refresh_rules(); self._append_log(f"[OK] 已載入 {len(self.rules)} 條規則。")
             except ValueError as exc: self.show_error_message(str(exc))
+
+    def export_rules_excel_dialog(self) -> None:
+        """匯出正式規則順序，而不是目前列表的篩選結果。"""
+        template = not self.rules
+        if template and not messagebox.askyesno("匯出 Excel 範本", "目前沒有規則，是否產生空白規則範本？"):
+            return
+        filename = "自訂分級規則範本.xlsx" if template else f"自訂分級規則_{datetime.now():%Y%m%d_%H%M%S}.xlsx"
+        path = filedialog.asksaveasfilename(title="匯出規則 Excel", initialfile=filename, defaultextension=".xlsx", filetypes=[("Excel 活頁簿", "*.xlsx")])
+        if not path: return
+        headers = {column_index_to_letter(index): value for index, value in self.worksheet_headers.items()}
+        try:
+            (create_rule_excel_template if template else export_rules_to_excel)(path, *(() if template else (self.rules, headers)))
+        except (RuleExcelError, OSError) as exc:
+            self.show_error_message(str(exc)); return
+        self._append_log(f"[OK] 規則 Excel 已匯出：{path}")
+        messagebox.showinfo("匯出完成", "空白規則範本已建立。" if template else f"已匯出 {len(self.rules)} 條規則。")
+
+    def import_rules_excel_dialog(self) -> None:
+        path = filedialog.askopenfilename(title="匯入規則 Excel", filetypes=[("Excel 活頁簿", "*.xlsx")])
+        if not path: return
+        try: result = parse_rules_excel(path)
+        except (RuleExcelError, OSError) as exc: self.show_error_message(str(exc)); return
+        # 表頭僅供人工核對；與目前資料檔不一致時仍可匯入。
+        for row in result.rows:
+            if row.rule and row.rule.header and self.worksheet_headers:
+                actual = self.worksheet_headers.get(column_letter_to_index(row.rule.column), "")
+                if actual and actual != row.rule.header:
+                    row.warnings.append("規則表頭與目前資料 Excel 的實際表頭不同")
+        self.show_import_preview(result)
+
+    def show_import_preview(self, result) -> None:
+        window = ctk.CTkToplevel(self); window.title("規則匯入預覽"); window.geometry("1050x620"); window.minsize(850, 480); window.transient(self)
+        window.grid_columnconfigure(0, weight=1); window.grid_rowconfigure(1, weight=1)
+        normal = sum(row.severity == "normal" for row in result.rows); warnings = sum(row.severity == "warning" for row in result.rows); errors = sum(row.severity == "error" for row in result.rows)
+        summary = f"共讀取 {len(result.rows)} 條規則　正常：{normal}　警告：{warnings}　錯誤：{errors}"
+        if result.global_warnings: summary += "\n" + "；".join(result.global_warnings)
+        ctk.CTkLabel(window, text=summary, anchor="w", justify="left", font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, sticky="ew", padx=14, pady=12)
+        columns = ("row", "order", "column", "header", "gender", "operator", "condition", "level", "status", "detail")
+        tree = ttk.Treeview(window, columns=columns, show="headings")
+        headings = ("Excel列號", "順序", "欄位", "表頭", "性別", "判斷方式", "條件", "分級", "狀態", "問題說明")
+        widths = (75, 55, 55, 100, 55, 85, 120, 70, 55, 280)
+        for key, heading, width in zip(columns, headings, widths): tree.heading(key, text=heading); tree.column(key, width=width, anchor="w")
+        tree.tag_configure("warning", background="#fff3cd"); tree.tag_configure("error", background="#f8d7da")
+        for row in result.rows:
+            rule = row.rule; detail = "；".join(row.errors + row.warnings)
+            values = (f"第 {row.excel_row} 列", row.order or "", rule.column if rule else "", rule.header if rule else "", rule.gender if rule else "", OPERATOR_LABELS.get(rule.operator, rule.operator) if rule else "", format_rule_condition(rule) if rule and not row.errors else "", rule.level if rule else "", {"normal":"正常", "warning":"警告", "error":"錯誤"}[row.severity], detail)
+            tree.insert("", "end", values=values, tags=(row.severity,))
+        tree.grid(row=1, column=0, sticky="nsew", padx=14); scrollbar = ttk.Scrollbar(window, command=tree.yview); scrollbar.grid(row=1, column=1, sticky="ns", padx=(0, 14)); tree.configure(yscrollcommand=scrollbar.set)
+        actions = ctk.CTkFrame(window, fg_color="transparent"); actions.grid(row=2, column=0, columnspan=2, pady=14)
+        ctk.CTkButton(actions, text="關閉並修改 Excel" if result.has_errors else "取消", fg_color="gray50", command=window.destroy).pack(side="left", padx=6)
+        if not result.has_errors:
+            ctk.CTkButton(actions, text="取代目前全部規則", command=lambda: self._confirm_excel_import(window, result, "replace")).pack(side="left", padx=6)
+            ctk.CTkButton(actions, text="合併到目前規則", command=lambda: self._confirm_excel_import(window, result, "merge")).pack(side="left", padx=6)
+        window.grab_set()
+
+    def _confirm_excel_import(self, preview, result, mode: str) -> None:
+        imported = result.rules
+        if mode == "replace":
+            message = "這將以 Excel 中的規則取代目前所有自訂分級規則。\n\n建議先使用『備份規則』建立備份。\n\n是否繼續？"
+            if not self._ask_confirmation("確定取代規則", message, "確定取代", "取消", preview): return
+        else:
+            combined = list(self.rules) + imported; statuses = collect_rule_statuses(combined)
+            warning_count = sum(status.severity == "warning" for status in statuses)
+            message = f"合併後共有 {len(combined)} 條規則，重新檢查發現 {warning_count} 條警告規則。\n\n仍要合併嗎？"
+            if not self._ask_confirmation("合併規則確認", message, "仍然匯入", "取消", preview): return
+        backup = deepcopy(self.rules)
+        try:
+            self.rules = imported if mode == "replace" else backup + imported
+            save_rules(self.rules_path, self.rules)
+            self._refresh_rules()
+        except Exception as exc:
+            self.rules = backup
+            try: save_rules(self.rules_path, backup)
+            except OSError: pass
+            self._refresh_rules(); self.show_error_message(f"規則匯入失敗，已恢復匯入前規則：{exc}"); return
+        preview.destroy()
+        warning_count = sum(bool(row.warnings) for row in result.rows)
+        self._append_log(f"[OK] 成功匯入 {len(imported)} 條規則，目前共 {len(self.rules)} 條。")
+        messagebox.showinfo("規則匯入完成", f"成功匯入：{len(imported)} 條\n警告：{warning_count} 條\n目前規則總數：{len(self.rules)} 條")
 
     def show_rules_overview(self) -> None:
         if self.rules_overview_window is not None and self.rules_overview_window.winfo_exists():

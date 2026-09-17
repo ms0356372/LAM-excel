@@ -32,12 +32,16 @@ class CustomRule:
     value: Any = None
     minimum: float | None = None
     maximum: float | None = None
+    header: str = ""
+    note: str = ""
 
     def __post_init__(self) -> None:
         self.column = str(self.column).strip().upper()
         self.gender = str(self.gender).strip()
         self.operator = str(self.operator).strip()
         self.level = str(self.level).strip()
+        self.header = str(self.header or "").strip()
+        self.note = str(self.note or "").strip()
 
     def validate(self) -> None:
         if not self.column.isalpha() or not 1 <= len(self.column) <= 3:
@@ -83,6 +87,7 @@ class CustomRule:
             enabled=data.get("enabled", True), value=data.get("value"),
             minimum=data.get("minimum", data.get("min")),
             maximum=data.get("maximum", data.get("max")),
+            header=data.get("header", ""), note=data.get("note", ""),
         )
         rule.validate()
         return rule
