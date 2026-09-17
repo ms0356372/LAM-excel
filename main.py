@@ -6,9 +6,7 @@ Excel 原生 COM 屬性 Interior.ColorIndex，以保留格式、公式、巨集�
 
 from __future__ import annotations
 
-import importlib.util
 import os
-import platform
 import queue
 import re
 import tempfile
@@ -28,12 +26,6 @@ COLOR_TO_LEVEL = {-4142: "第一級", 34: "第二級", 6: "第三級", 3: "第�
 EXCEL_MAX_ROWS = 1_048_576
 EXCEL_MAX_COLUMNS = 16_384
 SAVE_FORMATS = {".xlsx": 51, ".xlsm": 52, ".xls": 56}
-PYWIN32_INSTALL_MESSAGE = (
-    "找不到 pywin32 套件（No module named 'win32com'）。\n"
-    "請在 Windows 的同一個 Python 環境安裝：pip install pywin32\n"
-    "若使用 VS Code，請確認已選擇安裝 pywin32 的 Python Interpreter。"
-)
-WINDOWS_EXCEL_MESSAGE = "本工具需在 Windows 且已安裝 Microsoft Excel 的環境執行，才能使用 Excel COM 讀取 ColorIndex。"
 
 
 class ExcelProcessError(Exception):
@@ -156,7 +148,6 @@ class ExcelProcessor:
         self.log_callback = log_callback
         self.excel = None
         self.workbook = None
-        self.com_initialized = False
 
     def log(self, message: str) -> None:
         if self.log_callback:
@@ -242,36 +233,14 @@ class ExcelProcessor:
         if self.excel is not None:
             self.excel.Quit()
             self.excel = None
-        if self.com_initialized:
-            import pythoncom
-
-            pythoncom.CoUninitialize()
-            self.com_initialized = False
-
-    def _ensure_excel_com_available(self) -> None:
-        """檢查 Windows、Excel COM 與 pywin32 是否可用，並提供清楚錯誤訊息。"""
-        if platform.system() != "Windows":
-            raise ExcelProcessError(WINDOWS_EXCEL_MESSAGE)
-        if importlib.util.find_spec("win32com") is None or importlib.util.find_spec("pythoncom") is None:
-            raise ExcelProcessError(PYWIN32_INSTALL_MESSAGE)
 
     def _open_excel(self, file_path: str, read_only: bool) -> None:
-        self._ensure_excel_com_available()
-
-        import pythoncom
         import win32com.client
 
-        # 背景執行緒使用 COM 前需初始化，避免 tkinter 執行緒與 Excel COM 互相干擾。
-        pythoncom.CoInitialize()
-        self.com_initialized = True
-        try:
-            self.excel = win32com.client.DispatchEx("Excel.Application")
-            self.excel.Visible = False
-            self.excel.DisplayAlerts = False
-            self.workbook = self.excel.Workbooks.Open(os.path.abspath(file_path), ReadOnly=read_only)
-        except Exception as exc:
-            self.release_excel_objects(save_changes=False)
-            raise ExcelProcessError(f"無法啟動或開啟 Microsoft Excel，請確認已安裝 Excel 且檔案未被鎖定：{exc}") from exc
+        self.excel = win32com.client.DispatchEx("Excel.Application")
+        self.excel.Visible = False
+        self.excel.DisplayAlerts = False
+        self.workbook = self.excel.Workbooks.Open(os.path.abspath(file_path), ReadOnly=read_only)
 
     def _validate_input_file(self, file_path: str) -> None:
         if not file_path or not Path(file_path).exists():
