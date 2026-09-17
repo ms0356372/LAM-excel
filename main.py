@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, scrolledtext, ttk
 
 
 DEFAULT_RANGE = "M1:R2000"
@@ -26,6 +26,99 @@ COLOR_TO_LEVEL = {-4142: "第一級", 34: "第二級", 6: "第三級", 3: "第�
 EXCEL_MAX_ROWS = 1_048_576
 EXCEL_MAX_COLUMNS = 16_384
 SAVE_FORMATS = {".xlsx": 51, ".xlsm": 52, ".xls": 56}
+
+HELP_SECTIONS = [
+    ("一、程式用途", """本工具用於整理 Excel 指定範圍中的儲存格資料，依照 Excel 原生的 Interior.ColorIndex 判斷管理級數，並將符合條件的欄位表頭整理到「第一級」、「第二級」、「第三級」、「第四級」對應欄位中。"""),
+    ("二、支援的 Excel 格式", """支援：
+• .xlsx
+• .xlsm
+• .xls
+
+建議優先使用 .xlsx。
+如果使用 .xlsm，程式會保留原有 VBA 巨集。"""),
+    ("三、匯入 Excel 前注意事項", """1. Excel 第一列必須為表頭。
+2. 工作表第一列必須存在「管理級數」表頭。
+3. 表頭名稱必須完全一致，不可多空格、少字或使用其他名稱。
+   正確：管理級數
+   錯誤：管理 級數、管理級、管理級數　
+4. 欲判斷的資料欄位也必須在第一列有表頭名稱。
+5. 欲處理的資料必須位於使用者指定的資料範圍內。例如 M1:R2000 只會判斷 M 到 R 欄、1 到 2000 列的內容。
+6. 指定範圍以第一列作為表頭，實際資料從第二列開始判斷。
+7. 空白儲存格不會進行管理級數判斷。
+8. 儲存格即使有底色，只要沒有任何資料，仍視為空白，不會列入結果。
+9. 建議處理前先將 Excel 檔案關閉，避免檔案被鎖定而無法儲存。
+10. 建議先保留原始 Excel 備份。"""),
+    ("四、ColorIndex 判斷規則", """ColorIndex -4142 → 第一級
+ColorIndex 34    → 第二級
+ColorIndex 6     → 第三級
+ColorIndex 3     → 第四級
+
+其他 ColorIndex：不處理。
+
+本程式判斷的是 Excel 原生 Interior.ColorIndex，不是單純依照畫面看到的 RGB 顏色判斷。"""),
+    ("五、整理結果規則", """當某一個儲存格符合管理級數條件時，程式會取得該欄位第一列的表頭名稱，並寫入相同資料列的管理級數欄位。
+
+例如：F1 = 噪音作業、F4 有資料，且 F4 的 ColorIndex = -4142，則該列「第一級」欄位會寫入：
+噪音作業；
+
+如果同一列有多個第一級項目，例如「噪音作業；」與「粉塵作業；」，最後會整理成：
+噪音作業；粉塵作業；
+
+排列順序依 Excel 欄位由左至右。"""),
+    ("六、四個級數欄位", """程式會在「管理級數」後方建立：
+第一級
+第二級
+第三級
+第四級
+
+如果這四個欄位已經存在，不會重複新增。
+每次重新執行時，程式會先清除這四個欄位原本的整理結果，再重新計算，因此不會重複累加舊資料。"""),
+    ("七、資料範圍說明", """資料範圍可自行輸入。例如 M1:R2000 代表：
+起始欄：M
+結束欄：R
+起始列：1
+結束列：2000
+
+程式只會判斷此範圍內的儲存格，範圍外的資料不會被判斷。如果輸入格式錯誤，程式會停止處理並顯示錯誤訊息。"""),
+    ("八、輸出檔案", """程式原則上使用另存新檔，不直接修改原始檔案。
+請確認輸出位置有寫入權限。處理完成後，請確認輸出檔案是否正常開啟。"""),
+    ("九、常見錯誤", """1. 問題：找不到「管理級數」
+   原因：第一列表頭不存在完全相同的「管理級數」。
+
+2. 問題：某些資料沒有被分類
+   可能原因：
+   • 儲存格為空白
+   • ColorIndex 不是指定的四種
+   • 資料不在指定範圍內
+   • 表頭為空白
+   • Excel 使用的是條件格式，看起來有顏色但原始 ColorIndex 不符合
+
+3. 問題：Excel 無法儲存
+   可能原因：
+   • Excel 檔案目前已開啟
+   • 檔案被其他程式鎖定
+   • 輸出資料夾沒有寫入權限
+   • 檔案名稱或路徑異常
+
+4. 問題：處理結果與預期不同
+   建議先確認：
+   • 指定的資料範圍
+   • 第一列表頭
+   • 儲存格實際 ColorIndex
+   • 儲存格是否真的有資料"""),
+    ("十、建議操作流程", """1. 準備 Excel 檔案
+2. 確認第一列為表頭
+3. 確認有「管理級數」
+4. 關閉 Excel 檔案
+5. 開啟本工具
+6. 選擇 Excel 檔案
+7. 選擇工作表
+8. 輸入資料範圍
+9. 選擇輸出位置
+10. 按下開始整理
+11. 等待處理完成
+12. 開啟輸出 Excel 確認結果"""),
+]
 
 
 class ExcelProcessError(Exception):
@@ -371,8 +464,29 @@ class ExcelOrganizerApp(tk.Tk):
         ttk.Label(self, text="狀態 / 執行紀錄：").grid(row=5, column=0, sticky="nw", **padding)
         self.log_text = tk.Text(self, height=22, wrap="word")
         self.log_text.grid(row=5, column=1, columnspan=2, sticky="nsew", **padding)
+        ttk.Button(self, text="使用說明", command=self.show_help_window).grid(row=6, column=2, sticky="e", **padding)
         self.columnconfigure(1, weight=1)
         self.rowconfigure(5, weight=1)
+
+    def show_help_window(self) -> None:
+        """開啟不影響主程式操作的可捲動使用說明視窗。"""
+        help_window = tk.Toplevel(self)
+        help_window.title("Excel 管理級數整理工具－使用說明")
+        help_window.geometry("700x600")
+        help_window.minsize(520, 400)
+
+        help_text = scrolledtext.ScrolledText(help_window, wrap="word", padx=18, pady=14)
+        help_text.grid(row=0, column=0, sticky="nsew", padx=10, pady=(10, 4))
+        help_text.tag_configure("heading", font=("TkDefaultFont", 12, "bold"), spacing1=12, spacing3=6)
+        help_text.tag_configure("body", spacing3=4)
+        for heading, body in HELP_SECTIONS:
+            help_text.insert("end", f"【{heading}】\n", "heading")
+            help_text.insert("end", body + "\n", "body")
+        help_text.configure(state="disabled")
+
+        ttk.Button(help_window, text="關閉", command=help_window.destroy).grid(row=1, column=0, pady=(4, 10))
+        help_window.columnconfigure(0, weight=1)
+        help_window.rowconfigure(0, weight=1)
 
     def select_excel_file(self) -> None:
         file_path = filedialog.askopenfilename(title="選擇 Excel 檔案", filetypes=[("Excel files", "*.xlsx *.xlsm *.xls")])
