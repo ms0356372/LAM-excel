@@ -170,6 +170,18 @@ if %EXE_SIZE% LEQ 0 (
 )
 
 echo [OK] release 已成功取得 EXE，且檔案大小大於 0。
+echo [INFO] 正式 EXE 已驗證，正在清除本次打包產生的 build 與 dist 資料夾...
+if exist "%PROJECT_DIR%\build" rmdir /s /q "%PROJECT_DIR%\build"
+if exist "%PROJECT_DIR%\build" (
+    echo [ERROR] EXE 已建立，但無法清除 build 資料夾，請確認其中檔案未被占用。
+    goto :failed
+)
+if exist "%PROJECT_DIR%\dist" rmdir /s /q "%PROJECT_DIR%\dist"
+if exist "%PROJECT_DIR%\dist" (
+    echo [ERROR] EXE 已建立，但無法清除 dist 資料夾，請確認其中檔案未被占用。
+    goto :failed
+)
+echo [OK] build 與 dist 資料夾已清除，只保留 release 中的正式 EXE。
 echo.
 echo ========================================
 echo [SUCCESS] EXE 打包完成
@@ -182,6 +194,7 @@ goto :success
 :failed
 echo.
 echo [ERROR] 打包流程已停止，請依上方階段訊息排除問題。
+echo [INFO] 若 PyInstaller 已開始執行，build 與 dist 將保留供除錯。
 echo.
 echo 按任意鍵關閉視窗...
 pause >nul

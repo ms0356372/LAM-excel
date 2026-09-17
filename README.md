@@ -91,6 +91,7 @@ build_exe.bat
 6. 使用既有的 `Excel管理級數整理工具.spec` 執行 PyInstaller 打包。
 7. 驗證 PyInstaller 回傳結果、EXE 是否存在及檔案大小是否大於 0。
 8. 將完成的 EXE 複製到 `release`。
+9. 確認 release EXE 有效後，清除本次打包產生的 `build` 與 `dist`；若打包失敗則保留它們供除錯。
 
 最終成品位於：
 
