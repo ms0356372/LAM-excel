@@ -21,7 +21,12 @@ from tkinter import filedialog, messagebox
 import customtkinter as ctk
 
 from config_manager import default_rules_path, load_rules, save_rules
-from rule_engine import evaluate_custom_level, find_possible_overlaps, is_blank_value
+from rule_engine import (
+    evaluate_custom_level,
+    find_override_pairs,
+    find_rule_conflicts,
+    is_blank_value,
+)
 from rule_models import (
     LABEL_TO_OPERATOR,
     OPERATOR_LABELS,
@@ -144,7 +149,7 @@ CUSTOM_HELP_SECTIONS = [
     ("比較範例", ">10.6 → 第三級\n<25.8 → 第二級\n數字或看起來是數字的文字都會嘗試轉換。"),
     ("完全相符範例", "++ → 第二級\n代謝症候群 → 第四級\n比較前會移除前後空白，但不是模糊搜尋。"),
     ("男女設定", "共用：男女皆使用。\n男／女：只套用相同性別。專用規則先判斷；若沒有符合，再使用共用規則。"),
-    ("規則順序", "同一欄位與同一性別群組由上至下判斷，第一個符合的規則為準。可用上移／下移調整順序。重疊規則可以保存，但會顯示提醒。"),
+    ("規則順序與衝突", "同一欄位與同一性別群組由上至下判斷，第一個符合的規則為準。可用上移／下移調整順序。新增或編輯時會精確檢查重疊；完全相同規則不得重複，其他重疊可由使用者確認後保存，列表會顯示 ⚠。開始整理前也會再次確認。男女專用規則與共用規則可能同時命中時只屬覆寫提醒，專用規則仍優先。"),
     ("注意事項", "空白儲存格會跳過。數值規則遇到無法轉換的文字不會判斷成功，也不會中斷。規則可存成 JSON；損壞的 JSON 不會阻止程式啟動。"),
 ]
 
@@ -680,6 +685,11 @@ class ExcelOrganizerApp(ctk.CTk):
 
     def _refresh_rules(self) -> None:
         for child in self.rules_frame.winfo_children(): child.destroy()
+        conflict_indexes = {
+            index
+            for conflict in find_rule_conflicts(self.rules)
+            for index in (conflict.first_index, conflict.second_index)
+        }
         headings = ("啟用", "欄位", "表頭", "性別", "判斷方式", "條件", "分級", "操作")
         for col, heading in enumerate(headings):
             ctk.CTkLabel(self.rules_frame, text=heading, font=ctk.CTkFont(weight="bold")).grid(row=0, column=col, padx=5, pady=4, sticky="w")
@@ -691,7 +701,8 @@ class ExcelOrganizerApp(ctk.CTk):
             ctk.CTkCheckBox(self.rules_frame, text="", width=24, variable=enabled, command=lambda r=rule, v=enabled: self._toggle_rule(r, v)).grid(row=row, column=0, padx=5)
             col_index = column_letter_to_index(rule.column)
             header = self.worksheet_headers.get(col_index, "") or "—"
-            values = (rule.column, header, rule.gender, OPERATOR_LABELS[rule.operator], rule.condition_text, rule.level)
+            column_text = f"⚠ {rule.column}" if row - 1 in conflict_indexes else rule.column
+            values = (column_text, header, rule.gender, OPERATOR_LABELS[rule.operator], rule.condition_text, rule.level)
             for col, value in enumerate(values, start=1): ctk.CTkLabel(self.rules_frame, text=str(value), anchor="w").grid(row=row, column=col, padx=5, pady=3, sticky="w")
             buttons = ctk.CTkFrame(self.rules_frame, fg_color="transparent")
             buttons.grid(row=row, column=7, padx=3)
@@ -699,7 +710,7 @@ class ExcelOrganizerApp(ctk.CTk):
                 ctk.CTkButton(buttons, text=text, width=42, height=25, command=command).pack(side="left", padx=2)
 
     def _toggle_rule(self, rule: CustomRule, variable: tk.BooleanVar) -> None:
-        rule.enabled = variable.get(); self._auto_save()
+        rule.enabled = variable.get(); self._auto_save(); self._refresh_rules()
 
     def add_rule(self) -> None: self._show_rule_editor(None)
     def edit_rule(self, index: int) -> None: self._show_rule_editor(index)
@@ -748,16 +759,74 @@ class ExcelOrganizerApp(ctk.CTk):
         def save() -> None:
             try:
                 column_name = column.get().split(" - ", 1)[0].strip().upper()
-                item = CustomRule(column_name, gender.get(), LABEL_TO_OPERATOR[operator.get()], level.get(), value=value.get(), minimum=minimum.get(), maximum=maximum.get()); item.validate()
+                item = CustomRule(column_name, gender.get(), LABEL_TO_OPERATOR[operator.get()], level.get(), enabled=current.enabled if current else True, value=value.get(), minimum=minimum.get(), maximum=maximum.get()); item.validate()
             except (ValueError, KeyError) as exc:
                 messagebox.showerror("規則錯誤", str(exc), parent=window); return
-            if index is None: self.rules.append(item)
-            else: self.rules[index] = item
-            overlaps = find_possible_overlaps(self.rules)
+            candidate_rules = list(self.rules)
+            if index is None: candidate_rules.append(item); saved_index = len(candidate_rules) - 1
+            else: candidate_rules[index] = item; saved_index = index
+            related = [conflict for conflict in find_rule_conflicts(candidate_rules) if saved_index in (conflict.first_index, conflict.second_index)]
+            duplicate = next((conflict for conflict in related if conflict.is_duplicate), None)
+            if duplicate:
+                messagebox.showerror("此規則已存在", "相同欄位、性別、判斷方式、條件與分級的規則已存在，請修改目前規則。", parent=window)
+                return
+            override_count = sum(saved_index in pair for pair in find_override_pairs(candidate_rules))
+            if related or override_count:
+                details = self._format_conflict_message(candidate_rules, saved_index, related, override_count)
+                if not self._ask_confirmation("偵測到規則可能重疊", details, "仍然儲存", "返回修改", window):
+                    return
+            self.rules = candidate_rules
             self._auto_save(); self._refresh_rules(); window.destroy()
-            if item.column in overlaps: messagebox.showwarning("規則重疊提醒", "此欄位可能存在重疊判斷規則，實際結果依規則順序，以第一個符合的規則為準。")
         actions = ctk.CTkFrame(window, fg_color="transparent"); actions.grid(row=5, column=0, columnspan=2, pady=20)
         ctk.CTkButton(actions, text="儲存", command=save).pack(side="left", padx=8); ctk.CTkButton(actions, text="取消", fg_color="gray50", command=window.destroy).pack(side="left", padx=8)
+
+    def _format_conflict_message(self, rules: list[CustomRule], saved_index: int, conflicts, override_count: int) -> str:
+        current = rules[saved_index]
+        header = self.worksheet_headers.get(column_letter_to_index(current.column), "") or current.column
+        lines = [f"欄位：{header}", f"目前規則：{current.condition_text} → {current.level}"]
+        for conflict in conflicts:
+            other_index = conflict.second_index if conflict.first_index == saved_index else conflict.first_index
+            other = rules[other_index]
+            lines.append(f"衝突規則：{other.condition_text} → {other.level}")
+            if conflict.is_same_condition:
+                lines.append("原因：相同條件被設定為不同分級。")
+            else:
+                lines.append("原因：兩條規則存在可同時符合的值。")
+        if override_count:
+            lines.append(f"覆寫提醒：另有 {override_count} 條同欄位的男女專用／共用規則可能同時命中；專用規則會優先。")
+        lines.append("實際分析時將依規則順序，使用第一個符合的規則。")
+        return "\n".join(lines)
+
+    def _ask_confirmation(self, title: str, message: str, confirm_text: str, cancel_text: str, parent=None) -> bool:
+        """顯示具有明確動作文字的 modal 確認視窗。"""
+        dialog = ctk.CTkToplevel(parent or self)
+        dialog.title(title)
+        dialog.geometry("620x430")
+        dialog.minsize(500, 320)
+        dialog.transient(parent or self)
+        dialog.grid_columnconfigure(0, weight=1)
+        dialog.grid_rowconfigure(0, weight=1)
+        result = {"confirmed": False}
+        text = ctk.CTkTextbox(dialog, wrap="word", corner_radius=8)
+        text.grid(row=0, column=0, sticky="nsew", padx=18, pady=(18, 10))
+        text.insert("end", message)
+        text.configure(state="disabled")
+        actions = ctk.CTkFrame(dialog, fg_color="transparent")
+        actions.grid(row=1, column=0, pady=(4, 18))
+
+        def close(confirmed: bool = False) -> None:
+            result["confirmed"] = confirmed
+            dialog.grab_release()
+            dialog.destroy()
+
+        ctk.CTkButton(actions, text=confirm_text, command=lambda: close(True)).pack(side="left", padx=8)
+        ctk.CTkButton(actions, text=cancel_text, fg_color="gray50", command=close).pack(side="left", padx=8)
+        dialog.protocol("WM_DELETE_WINDOW", close)
+        dialog.grab_set()
+        dialog.wait_window()
+        if parent is not None and parent.winfo_exists():
+            parent.grab_set()
+        return result["confirmed"]
 
     def _auto_save(self) -> None:
         try: save_rules(self.rules_path, self.rules)
@@ -813,10 +882,22 @@ class ExcelOrganizerApp(ctk.CTk):
         if path: self.output_path_var.set(path)
 
     def start_processing(self) -> None:
+        mode = self._current_mode()
+        if mode == "自訂分級":
+            conflicts = find_rule_conflicts(self.rules)
+            if conflicts and not self._ask_confirmation(
+                "規則重疊確認",
+                f"目前共有 {len(conflicts)} 組可能重疊的規則。\n\n"
+                "繼續分析時將依規則排列順序，使用第一個符合的規則。\n\n"
+                "請確認是否繼續分析。",
+                "繼續分析",
+                "取消",
+            ):
+                return
         if os.path.abspath(self.file_path_var.get() or "") == os.path.abspath(self.output_path_var.get() or ""):
             if not messagebox.askyesno("覆蓋確認", "輸出路徑與原始檔相同，確定要覆蓋嗎？"): return
         self.start_button.configure(state="disabled"); self.progress.set(0)
-        mode = self._current_mode(); self._append_log(f"[INFO] 開始{mode}...")
+        self._append_log(f"[INFO] 開始{mode}...")
         args = (mode, self.file_path_var.get(), self.worksheet_var.get(), self.range_var.get(), self.output_path_var.get(), list(self.rules))
         threading.Thread(target=self._worker_process, args=args, daemon=True).start()
 

@@ -3,12 +3,18 @@ import json
 import pytest
 
 from config_manager import load_rules, save_rules
-from rule_engine import evaluate_custom_level, evaluate_rule
+from rule_engine import (
+    evaluate_custom_level,
+    evaluate_rule,
+    find_override_pairs,
+    find_rule_conflicts,
+    rules_overlap,
+)
 from rule_models import CustomRule
 
 
-def rule(operator, level="第一級", gender="共用", value=None, minimum=None, maximum=None):
-    item = CustomRule("A", gender, operator, level, value=value, minimum=minimum, maximum=maximum)
+def rule(operator, level="第一級", gender="共用", value=None, minimum=None, maximum=None, column="A"):
+    item = CustomRule(column, gender, operator, level, value=value, minimum=minimum, maximum=maximum)
     item.validate()
     return item
 
@@ -72,3 +78,50 @@ def test_validation_and_json_roundtrip(tmp_path):
     path.write_text(json.dumps([]), encoding="utf-8")
     with pytest.raises(ValueError, match="最外層"):
         load_rules(path)
+
+
+@pytest.mark.parametrize(
+    "first,second",
+    [
+        (rule(">", value=10), rule(">", value=20)),
+        (rule("<", value=30), rule("<", value=20)),
+        (rule("range", minimum=1, maximum=10), rule("range", minimum=5, maximum=15)),
+        (rule("range", minimum=1, maximum=10), rule(">", value=8)),
+        (rule(">=", value=10), rule("<=", value=20)),
+        (rule("exact", value="++"), rule("exact", value=" ++ ")),
+    ],
+)
+def test_required_overlap_examples(first, second):
+    assert rules_overlap(first, second)
+
+
+@pytest.mark.parametrize(
+    "first,second",
+    [
+        (rule("range", minimum=1, maximum=10), rule(">", value=10)),
+        (rule("range", minimum=1, maximum=10), rule("<", value=1)),
+        (rule("exact", value="++"), rule("exact", value="+++")),
+        (rule("<", value=10), rule(">=", value=10)),
+    ],
+)
+def test_non_overlapping_boundaries(first, second):
+    assert not rules_overlap(first, second)
+
+
+def test_conflict_scope_duplicate_and_same_condition_classification():
+    duplicate = rule(">=", "第二級", value=27)
+    different_level = rule(">=", "第三級", value=27)
+    other_gender = rule(">=", "第四級", "男", value=27)
+    other_column = rule(">=", "第四級", value=27, column="B")
+    conflicts = find_rule_conflicts([duplicate, rule(">=", "第二級", value=27), different_level, other_gender, other_column])
+    assert [conflict.kind for conflict in conflicts] == ["duplicate", "same_condition", "same_condition"]
+    assert all(conflict.second_index not in {3, 4} for conflict in conflicts)
+
+
+def test_disabled_rules_are_not_conflicts_and_override_is_separate():
+    common = rule(">=", "第二級", value=80)
+    male = rule(">=", "第三級", "男", value=90)
+    disabled = rule(">=", "第四級", value=90)
+    disabled.enabled = False
+    assert find_rule_conflicts([common, male, disabled]) == []
+    assert find_override_pairs([common, male, disabled]) == [(1, 0)]
